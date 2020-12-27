@@ -1,0 +1,16 @@
+Filter Settings file
+ell_essess EQ V1
+Dated: 05.11.1996 00:00:01
+Notes: MyEqualizerSettings
+Equaliser: Generic
+No measurement
+Filter: ON PK Fc 32 Hz Gain 0 dB Q 1
+Filter: ON PK Fc 64 Hz Gain 0 dB Q 1
+Filter: ON PK Fc 125 Hz Gain 3 dB Q 1
+Filter: ON PK Fc 250 Hz Gain 8 dB Q 1
+Filter: ON PK Fc 500 Hz Gain 8 dB Q 1
+Filter: ON PK Fc 1000 Hz Gain 4 dB Q 1
+Filter: ON PK Fc 2000 Hz Gain 2 dB Q 1
+Filter: ON PK Fc 4000 Hz Gain 2 dB Q 1
+Filter: ON PK Fc 8000 Hz Gain 1 dB Q 1
+Filter: ON PK Fc 16000 Hz Gain 1 dB Q 1
