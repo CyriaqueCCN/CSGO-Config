@@ -17,6 +17,10 @@ Commands and binds for practicing aim, nades and maps.
 ### 0_overwatch.cfg
 Commands and binds for an easier OW/demo review
 
+### 0_video.cfg
+In-game video + nvidia settings in a human readable format
+TODO : tweak Nvidia Settings and test it
+
 ## Files at :  %ProgramFiles(X86)%\Steam\userdata\\<STEAMID>\730\local\cfg
 
 ### video.txt
@@ -29,7 +33,7 @@ Increase the frequency range of useful sounds such as footsteps
 
 ## Launch options
 Current :
-`-freq 165 -full -w 1440 -h 1080 -novid -console -high -nojoy +exec autoexec`
+`-novid +fps_max 400 +rate 786432 -high -w 1440 -h 1080 -nojoy +exec autoexec`
 
 Old :
-`-tickrate 128 -nod3d9ex`
+`-freq 165 -tickrate 128 -console`
