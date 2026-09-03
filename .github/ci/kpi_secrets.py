@@ -228,12 +228,6 @@ def main() -> int:
         print(f"   {n:5d}  {r}")
 
     chemin = os.path.join(a.racine, REFERENCE)
-    if a.ecrire:
-        with open(chemin, "w", encoding="utf-8") as f:
-            json.dump(m, f, indent=2, sort_keys=True)
-            f.write("\n")
-        print(f"reference ecrite : {REFERENCE}")
-        return 0
 
     # LE RESIDUEL EST UN INVARIANT, PAS UNE VALEUR ENREGISTREE.
     #
@@ -254,6 +248,26 @@ def main() -> int:
         print("  suffit pas, il reste dans l'historique - soit c'est un")
         print("  faux positif, et l'exclusion doit dire pourquoi.")
         return 1
+
+    # ET `--ecrire` PASSE PAR LA MEME GARDE, DESORMAIS.
+    #
+    # Elle etait posee APRES le bloc d'ecriture : `--ecrire` rendait donc
+    # zero en enregistrant un residuel non nul, ce qui est exactement le
+    # defaut que la garde existe pour empecher. Meme defaut, a moitie
+    # repare. Mesure du 03/09, en deployant sur quatorze depots : des
+    # references ecrites avec `residuel` valant 1, 4, 102, 382, 404 et
+    # meme 2601, toutes rendues avec rc=0.
+    #
+    # Le job de CI ne les aurait pas acceptees - il n'utilise pas
+    # `--ecrire` et la garde le protegeait. Mais une reference fausse
+    # commitee est une bombe a retardement : elle se relit comme un etat
+    # sain, et c'est le prochain qui la paie.
+    if a.ecrire:
+        with open(chemin, "w", encoding="utf-8") as f:
+            json.dump(m, f, indent=2, sort_keys=True)
+            f.write("\n")
+        print(f"reference ecrite : {REFERENCE}")
+        return 0
 
     if not os.path.exists(chemin):
         print(f"ARRET: {REFERENCE} absent. Le produire avec --ecrire"
