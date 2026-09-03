@@ -65,21 +65,22 @@ REFERENCE = ".github/kpi-secrets.json"
 # brut. Une annotation `nosecret` aurait masque le symptome ; composer
 # les chaines supprime la cause, et le fichier ne porte plus aucune
 # suite de caracteres qui ressemble a un secret.
+# Les deux fragments restent SEPARES jusqu'a l'execution : un balayeur
+# qui lit ce fichier ne voit que deux chaines courtes, dont aucune n'a
+# la forme d'un identifiant. C'est la meme raison qui interdisait le
+# `%` d'origine d'etre remplace par un litteral complet.
+_TEMOIN_MOTIF = "AKIA" + "IOSFODNN7EXAMPLE"
+_TEMOIN_ENTROPIE = "ghp_" + "".join(
+    random.Random(1337).choices(
+        # `string` plutot que l'alphabet en clair : ecrit en litteral,
+        # il est LUI-MEME a haute entropie et se faisait trouver ici.
+        # Meme defaut que dans `tools/registres.py`, meme remede : on
+        # supprime la chaine au lieu de l'annoter.
+        string.ascii_letters + string.digits, k=36))
+
 TEMOINS = {
-    "_temoin_motif.py":
-        'AWS_KEY = "%s%s"\n' % ("AKIA", "IOSFODNN7EXAMPLE"),
-    # Genere, jamais ecrit : un fragment de vingt caracteres pseudo
-    # aleatoires est DEJA a haute entropie et se faisait trouver ici.
-    # La graine fixe garde le temoin identique d'une execution a l'autre.
-    "_temoin_entropie.py":
-        'TOK = "ghp_%s"\n' % "".join(
-            random.Random(1337).choices(
-                # `string` plutot que l'alphabet en clair : ecrit en
-                # litteral, il est LUI-MEME a haute entropie et se
-                # faisait trouver ici. Meme defaut que dans
-                # `tools/registres.py`, et le meme remede vaut : on
-                # supprime la chaine au lieu de l'annoter.
-                string.ascii_letters + string.digits, k=36)),
+    "_temoin_motif.py": f'AWS_KEY = "{_TEMOIN_MOTIF}"\n',
+    "_temoin_entropie.py": f'TOK = "{_TEMOIN_ENTROPIE}"\n',
 }
 
 
@@ -101,7 +102,12 @@ def balayer(racine: str, config: str | None) -> list:
         # dont le fichier de configuration a ete retire.
         pass
     cmd.append(racine)
-    subprocess.run(cmd, capture_output=True, text=True)
+    # `check=False` EXPLICITE : trufflehog3 sort 2 quand il TROUVE
+    # quelque chose et 0 quand il ne trouve rien. Son code de retour
+    # ne distingue pas le succes de la panne, donc on ne s'en sert
+    # pas ; c'est le fichier de sortie qui fait foi, et son absence
+    # est traitee juste en dessous.
+    subprocess.run(cmd, capture_output=True, text=True, check=False)
     if not os.path.exists(sortie):
         raise SystemExit("ARRET: trufflehog3 n'a produit aucun fichier de sortie")
     with open(sortie, encoding="utf-8") as f:
@@ -124,10 +130,12 @@ def arbre_suivi(racine: str, sans_config: bool = False) -> str:
     On copie plutot que de deplacer : modifier l'arbre pendant qu'on le
     mesure est interdit par le chapitre 12.
     """
+    # `check=False` : le code de retour est lu explicitement a la
+    # ligne suivante, avec un message qui nomme le depot en cause.
     out = subprocess.run(["git", "-C", racine, "ls-files", "-z"],
-                         capture_output=True, text=True)
+                         capture_output=True, text=True, check=False)
     if out.returncode != 0:
-        raise SystemExit("ARRET: git ls-files a echoue dans %s" % racine)
+        raise SystemExit(f"ARRET: git ls-files a echoue dans {racine}")
     fichiers = [f for f in out.stdout.split("\0") if f]
     if not fichiers:
         raise SystemExit("ARRET: git ls-files rend zero fichier - "
@@ -213,18 +221,18 @@ def main() -> int:
     controle_actif(a.racine)
     m = mesurer(a.racine)
 
-    print("brut %d  residuel %d  faux positifs %d  taux %.1f %%"
-          % (m["brut"], m["residuel"], m["faux_positifs"],
-             100 * m["taux_faux_positifs"]))
+    print(f'brut {m["brut"]}  residuel {m["residuel"]}  '
+          f'faux positifs {m["faux_positifs"]}  '
+          f'taux {100 * m["taux_faux_positifs"]:.1f} %')
     for r, n in m["par_regle"].items():
-        print("   %5d  %s" % (n, r))
+        print(f"   {n:5d}  {r}")
 
     chemin = os.path.join(a.racine, REFERENCE)
     if a.ecrire:
         with open(chemin, "w", encoding="utf-8") as f:
             json.dump(m, f, indent=2, sort_keys=True)
             f.write("\n")
-        print("reference ecrite : %s" % REFERENCE)
+        print(f"reference ecrite : {REFERENCE}")
         return 0
 
     # LE RESIDUEL EST UN INVARIANT, PAS UNE VALEUR ENREGISTREE.
@@ -240,7 +248,7 @@ def main() -> int:
     # c'est un faux positif, et on ecrit l'exclusion QUI DIT POURQUOI.
     # L'enregistrer telle quelle n'est ni l'un ni l'autre.
     if m["residuel"] > 0:
-        print("ARRET: %d trouvaille(s) NON EXCLUE(S)." % m["residuel"])
+        print(f'ARRET: {m["residuel"]} trouvaille(s) NON EXCLUE(S).')
         print("  Un residuel non nul ne s'enregistre pas. Soit c'est un")
         print("  secret - le retirer et le REVOQUER, le retrait seul ne")
         print("  suffit pas, il reste dans l'historique - soit c'est un")
@@ -248,19 +256,21 @@ def main() -> int:
         return 1
 
     if not os.path.exists(chemin):
-        print("ARRET: %s absent. Le produire avec --ecrire et le RELIRE"
-              " avant de le commiter." % REFERENCE)
+        print(f"ARRET: {REFERENCE} absent. Le produire avec --ecrire"
+              " et le RELIRE avant de le commiter.")
         return 1
     with open(chemin, encoding="utf-8") as f:
         ref = json.load(f)
     if ref != m:
         print("ARRET: les KPI ont change depuis la reference.")
-        print("  reference : brut %s residuel %s FP %s taux %s"
-              % (ref.get("brut"), ref.get("residuel"),
-                 ref.get("faux_positifs"), ref.get("taux_faux_positifs")))
-        print("  mesure    : brut %s residuel %s FP %s taux %s"
-              % (m["brut"], m["residuel"], m["faux_positifs"],
-                 m["taux_faux_positifs"]))
+        print(f'  reference : brut {ref.get("brut")} '
+              f'residuel {ref.get("residuel")} '
+              f'FP {ref.get("faux_positifs")} '
+              f'taux {ref.get("taux_faux_positifs")}')
+        print(f'  mesure    : brut {m["brut"]} '
+              f'residuel {m["residuel"]} '
+              f'FP {m["faux_positifs"]} '
+              f'taux {m["taux_faux_positifs"]}')
         print("  Un residuel qui MONTE est un secret potentiel.")
         print("  Un taux de FP qui monte est une exclusion trop large.")
         print("  Regenerer avec --ecrire, RELIRE le diff, puis commiter.")
