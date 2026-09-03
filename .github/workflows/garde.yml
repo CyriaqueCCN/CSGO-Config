@@ -83,6 +83,7 @@ jobs:
       code: ${{ steps.detect.outputs.code }}
       zones_py: ${{ steps.detect.outputs.zones_py }}
       zones_cs: ${{ steps.detect.outputs.zones_cs }}
+      tierces: ${{ steps.detect.outputs.tierces }}
       non_couverts: ${{ steps.detect.outputs.non_couverts }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
@@ -134,6 +135,47 @@ jobs:
             done < .github/zones-tierces
             echo "zones tierces declarees : ${#exclus[@]}"
           fi
+
+          # UNE DECLARATION QUI NE FAIT RIEN EST PIRE QU'AUCUNE, ET
+          # C'EST CE QUE CE FICHIER FAISAIT JUSQU'ICI.
+          #
+          # `zones-tierces` retirait bien un chemin de la LISTE DE
+          # FICHIERS, mais les zones ci-dessous se reduisent aux entrees
+          # de PREMIER NIVEAU : un chemin declare SOUS ce niveau sortait
+          # de la liste et son repertoire parent restait une zone. ruff
+          # recevait le repertoire et rescannait tout dessous.
+          #
+          # Mesure du 03/09 sur `rainfall`, deux copies du greffon GDB
+          # PEDA sous `override/tools/peda/` et `rainfall/tools/peda/` :
+          #
+          #     sans exclusion outil   ->  ruff 1464   bandit 22
+          #     avec                   ->  ruff   14   bandit  0
+          #
+          # 1450 constats sur du code que personne ici n'a ecrit. Meme
+          # defaut sur `42projects` (330 sur 345) et sur `cyriaque-site`
+          # (declarer `*/migrations/*` ne retirait aucun des 14).
+          #
+          # POURQUOI PAS UNE LISTE DE FICHIERS. Essayee et REJETEE par la
+          # simulation : `web-challenges` porte
+          # `Codingame/Codingame Challenge 2022/IA.py`, et une liste
+          # jointe par des espaces se fait redecouper par le shell. Les
+          # outils, eux, savent exclure un chemin imbrique : on leur
+          # passe donc l'exclusion, on ne bricole pas la liste.
+          tierces=""
+          for e in ${exclus[@]+"${exclus[@]}"}; do
+            chemin="${e#:(exclude)}"
+            chemin="${chemin%/\*}"
+            case "$chemin" in
+              *[[:space:]]*)
+                echo "ARRET: chemin declare avec un espace : $chemin"
+                echo "  Les exclusions sont passees en arguments aux"
+                echo "  outils ; un espace y serait redecoupe par le"
+                echo "  shell et l'exclusion porterait ailleurs."
+                exit 1 ;;
+            esac
+            tierces="$tierces $chemin"
+          done
+          echo "tierces=${tierces# }" >> "$GITHUB_OUTPUT"
 
           n=$(git ls-files "${motifs[@]}" ':(exclude).github/*' \
                 ${exclus[@]+"${exclus[@]}"} | wc -l)
@@ -308,8 +350,11 @@ jobs:
       # portent du C# - pas les onze.
       - name: semgrep - C#
         if: always() && needs.perimetre.outputs.zones_cs != ''
-        run: semgrep scan --config p/csharp --error --quiet
-                          ${{ needs.perimetre.outputs.zones_cs }}
+        run: |
+          set -euo pipefail
+          ex=""; for t in ${{ needs.perimetre.outputs.tierces }}; do ex="$ex --exclude $t"; done
+          semgrep scan --config p/csharp --error --quiet $ex \
+                       ${{ needs.perimetre.outputs.zones_cs }}
       - name: ce que la chaine ne lit pas
         if: always()
         run: |
@@ -322,7 +367,16 @@ jobs:
           fi
       - name: bandit
         if: always() && needs.perimetre.outputs.zones_py != ''
-        run: bandit -r ${{ needs.perimetre.outputs.zones_py }} -ll -q
+        run: |
+          set -euo pipefail
+          # `bandit` veut ses exclusions en UNE liste separee par des
+          # virgules, la ou `ruff` et `semgrep` veulent un drapeau par
+          # chemin. Trois outils, trois syntaxes.
+          ex=""; for t in ${{ needs.perimetre.outputs.tierces }}; do ex="${ex:+$ex,}$t"; done
+          bandit -r ${{ needs.perimetre.outputs.zones_py }} ${ex:+-x "$ex"} -ll -q
       - name: ruff
         if: always() && needs.perimetre.outputs.zones_py != ''
-        run: ruff check ${{ needs.perimetre.outputs.zones_py }}
+        run: |
+          set -euo pipefail
+          ex=""; for t in ${{ needs.perimetre.outputs.tierces }}; do ex="$ex --exclude $t"; done
+          ruff check ${{ needs.perimetre.outputs.zones_py }} $ex
