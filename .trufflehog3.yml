@@ -1,0 +1,38 @@
+# Configuration du balayage de secrets.
+#
+# UNE SEULE EXCLUSION, ET ELLE EST UNIVERSELLE.
+# ---------------------------------------------
+# Aucun detecteur de MOTIF n'est desactive : les 30 regles qui cherchent
+# une forme d'identifiant connue - clef AWS, jeton GitHub, bloc PGP,
+# clef privee - restent actives PARTOUT, sans exception de chemin.
+#
+# Seule l'heuristique `high-entropy` est retiree sur
+# `.github/workflows/*`, parce que ce que la chaine de garde y ecrit est
+# STRUCTURELLEMENT a haute entropie : elle epingle ses actions par
+# EMPREINTE plutot que par etiquette, exactement pour la raison que son
+# en-tete explique. Sa bonne pratique de securite declenche donc le
+# balayeur.
+#
+# Mesure du 03/09, sur un depot qui rendait ZERO trouvaille avant le
+# deploiement : 6 apres, toutes dans `garde.yml`, toutes des empreintes
+# d'actions - quatre `actions/checkout`, deux `actions/setup-python`.
+# Le meme chiffre exactement sur les neuf depots, ce qui est la
+# signature d'une cause commune et non d'un contenu propre a chacun.
+#
+# CE QUE CE FICHIER NE FAIT PAS.
+# ------------------------------
+# Il ne rend PAS le job tolerant a une trouvaille residuelle.
+# `kpi_secrets.py` refuse tout residuel non nul, quelle que soit la
+# reference : une trouvaille est soit un secret a retirer ET revoquer,
+# soit un faux positif dont l'exclusion dit pourquoi. Elargir ce fichier
+# pour verdir un job serait attrape par le controle actif, qui exige que
+# les deux voies - motif et entropie - se declenchent encore.
+
+exclude:
+  - id: high-entropy
+    message: >-
+      Empreintes d'actions GitHub epinglees par la chaine de garde
+      elle-meme. La haute entropie y est structurelle. Les detecteurs
+      de motif restent actifs sur ces fichiers.
+    paths:
+      - .github/workflows/*

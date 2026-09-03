@@ -1,0 +1,200 @@
+# Chaine de garde. TOUT RESTE PRIVE : aucun rapport n'est publie, aucun
+# artefact ne sort du depot, aucune action tierce non epinglee.
+#
+# POURQUOI LES ACTIONS SONT EPINGLEES PAR EMPREINTE ET NON PAR ETIQUETTE.
+# Une etiquette `@v3` est mutable : le proprietaire de l'action peut la
+# repointer sur n'importe quel commit, et ce commit s'executerait avec nos
+# secrets. L'empreinte est la seule reference qui ne bouge pas.
+#
+# CE QUE CETTE CHAINE N'EST PAS. CCO a demande un IAST. Un IAST vrai
+# instrumente le programme A L'EXECUTION ; ce qui suit est du SAST et du
+# balayage de secrets, qui lisent le code au repos. La difference compte :
+# un SAST ne voit pas un defaut qui n'existe qu'avec des donnees reelles.
+# Nommer la chose correctement vaut mieux que promettre ce qu'on ne fait
+# pas ; l'IAST reste un chantier ouvert.
+#
+# LA POLITIQUE, posee par CCO le 03/09/2026.
+# ------------------------------------------
+# Deux jobs sont ACTIFS PAR DEFAUT sur tout depot : `cco custom controls`
+# et `secrets`. Le troisieme, `qualite`, ne s'arme que sur un depot qui
+# PORTE DU CODE que ses outils savent lire.
+#
+# La porte se CALCULE, elle ne se maintient pas. Une liste de depots
+# " portant du code " serait fausse au premier depot cree, et sa
+# peremption serait silencieuse : le job ne tournerait pas et personne ne
+# le verrait. Le job `perimetre` compte donc les fichiers SUIVIS PAR GIT
+# et rend une sortie que `qualite` consulte. Meme fichier partout, aucune
+# valeur a tenir a jour.
+# LES OUTILS SONT EPINGLES, COMME LES ACTIONS ET POUR LA MEME RAISON.
+# Ce fichier epingle ses actions par empreinte parce qu'une etiquette
+# mutable laisse un tiers changer ce qui s'execute chez nous. Les outils
+# Python etaient installes SANS version : le sens du job changeait donc
+# sous nous, sans commit et sans que personne le voie.
+#
+# Paye le 03/09 : `ruff check` rendait 113 erreurs avec 0.15.8 et 2497
+# avec 0.16.5, la version que `pip install ruff` allait chercher. Un
+# facteur vingt-deux, pour zero ligne de code modifiee. Un verdict qui
+# bouge sans commit n'est pas un verdict.
+#
+# Monter une version est desormais un COMMIT, relu, avec son delta de
+# constats. Ne JAMAIS redescendre une version pour reduire les
+# trouvailles : ce serait desarmer le controle en le deguisant en
+# maintenance.
+name: garde
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+
+  # ------------------------------------------------------------------
+  # La porte de `qualite`. Elle ne decide rien d'autre.
+  # ------------------------------------------------------------------
+  perimetre:
+    name: perimetre - ce depot porte-t-il du code
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.detect.outputs.code }}
+      zones_py: ${{ steps.detect.outputs.zones_py }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - id: detect
+        run: |
+          set -euo pipefail
+          # `git ls-files` et non `find` : on juge le DEPOT, pas l'espace
+          # de travail. Un artefact de construction ne doit pas armer un
+          # controle, et un fichier suivi mais absent du disque compte.
+          motifs="*.py *.js *.ts *.jsx *.tsx"
+          # `.github/` est EXCLU de la detection, et c'est la garde qui
+          # empeche la porte de se mentir a elle-meme. L'outillage de
+          # cette chaine est un fichier Python, identique dans tous les
+          # depots : l'y compter rendrait `code=true` PARTOUT, y compris
+          # sur un depot qui ne porte aucune ligne de code a lui. La
+          # porte deviendrait toujours vraie, donc inutile.
+          #
+          # Il reste dans les ZONES analysees quand le depot porte du
+          # code par ailleurs : on ne l'exclut pas de l'analyse, on
+          # l'exclut du VOTE.
+          n=$(git ls-files $motifs | grep -v '^\.github/' | wc -l)
+          echo "fichiers python/js/ts suivis : $n"
+          if [ "$n" -eq 0 ]; then
+            echo "code=false" >> "$GITHUB_OUTPUT"
+            echo "zones_py=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # LES ZONES SE CALCULENT AUSSI. Coder `tools/` en dur ferait du
+          # fichier une valeur par depot, donc une divergence qui attend.
+          # On prend les entrees de PREMIER NIVEAU qui portent du code :
+          # un repertoire, ou un fichier pose a la racine.
+          #
+          # ET ELLES NE PORTENT QUE DU PYTHON. `ruff` et `bandit` sont des
+          # outils PYTHON : leur passer un chemin JavaScript ne les fait
+          # pas refuser, ca leur fait analyser le fichier COMME du Python.
+          # Mesure du 03/09 sur Leekwars-Userscript : `ruff check` rend
+          # 2615 `invalid-syntax` sur un userscript de 2615 lignes, une
+          # par ligne. Un controle qui rend 2615 lignes de bruit cesse
+          # d'etre lu, et c'est pire que pas de controle.
+          # Le JS et le TS sont couverts par semgrep, qui balaye `.` avec
+          # ses propres configurations.
+          zones_py=$(git ls-files '*.py' | sed 's|/.*||' | sort -u | tr '\n' ' ')
+          echo "code=true" >> "$GITHUB_OUTPUT"
+          echo "zones_py=$zones_py" >> "$GITHUB_OUTPUT"
+          echo "zones python pour ruff et bandit : ${zones_py:-(aucune)}"
+
+  # ------------------------------------------------------------------
+  # ACTIF PAR DEFAUT, sur tout depot.
+  # ------------------------------------------------------------------
+  secrets:
+    name: secrets - gitleaks, trufflehog, KPI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          fetch-depth: 0   # l'historique ENTIER : un secret retire au
+                           # commit suivant reste dans l'historique.
+      - name: gitleaks
+        run: |
+          set -euo pipefail
+          V=8.18.4
+          curl -sSfL -o /tmp/gl.tgz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${V}/gitleaks_${V}_linux_x64.tar.gz"
+          tar -xzf /tmp/gl.tgz -C /tmp gitleaks
+          /tmp/gitleaks detect --source . --redact --no-banner --exit-code 1
+
+      # LA REPASSE ET LES KPI, demandes par CCO le 03/09.
+      # Un compte de trouvailles ne dit ni si le balayeur a regarde, ni si
+      # ce qu'il trouve sont des secrets. Cet outil mesure le BRUT (sans
+      # exclusions), le RESIDUEL (avec), en deduit les faux positifs et
+      # leur taux, et COMPARE le tout a une reference versionnee.
+      #
+      # Il ne l'ECRIT pas : `permissions: contents: read` est delibere, et
+      # un job qui ecrit dans le depot demanderait le droit inverse. Un
+      # ecart fait echouer, et le corriger est un commit humain, relu.
+      #
+      # Son controle actif passe AVANT la mesure : deux temoins de
+      # familles differentes - motif et entropie - doivent etre trouves.
+      # Elargir une exclusion pour verdir le job aveugle un des deux et
+      # l'outil s'arrete au lieu de rendre un zero rassurant.
+      - name: trufflehog, triage et KPI
+        run: |
+          set -euo pipefail
+          pip install --quiet trufflehog3==3.0.10
+          python3 .github/ci/kpi_secrets.py
+
+  # ------------------------------------------------------------------
+  # ACTIF PAR DEFAUT, sur tout depot. Renomme le 03/09 a la demande de
+  # CCO : ce sont SES controles, le nom le dit.
+  # ------------------------------------------------------------------
+  cco_custom_controls:
+    name: cco custom controls
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38  # v5.4.0
+        with:
+          python-version: '3.13'
+      - name: index des Skills a jour
+        # Non bloquant ici : les Skills vivent dans un AUTRE depot, donc
+        # ce controle ne peut pas les voir. Il est declare pour memoire et
+        # deviendra bloquant quand les deux depots seront reunis.
+        run: echo "a activer quand le depot des Skills sera joint"
+
+  # ------------------------------------------------------------------
+  # ARME SEULEMENT SI LE DEPOT PORTE DU CODE que ces outils lisent.
+  # ------------------------------------------------------------------
+  qualite:
+    name: qualite - semgrep, bandit, ruff
+    needs: perimetre
+    if: needs.perimetre.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38  # v5.4.0
+        with:
+          python-version: '3.13'
+      - run: pip install --quiet semgrep==1.176.0 bandit==1.9.4 ruff==0.16.5
+      - name: semgrep - python et js/ts
+        run: semgrep scan --config p/python --config p/javascript
+                          --config p/typescript --config p/secrets
+                          --error --quiet .
+      # `if: always()` : sans lui, l'echec de semgrep SAUTE les deux
+      # etapes suivantes et le job ne rapporte qu'un tiers de ce qu'il
+      # reproche. Mesure du 03/09 : semgrep echouait, bandit et ruff
+      # etaient marques `skipped`, et 27 puis 113 constats n'avaient
+      # jamais ete vus. Le premier echec masquait, il ne resumait pas.
+      # La garde sur la chaine vide n'est pas cosmetique : `ruff check`
+      # et `bandit -r` sans argument analysent le repertoire COURANT,
+      # donc tout le depot. Un depot sans Python passerait de "rien a
+      # analyser" a "tout analyser", en silence.
+      - name: bandit
+        if: always() && needs.perimetre.outputs.zones_py != ''
+        run: bandit -r ${{ needs.perimetre.outputs.zones_py }} -ll -q
+      - name: ruff
+        if: always() && needs.perimetre.outputs.zones_py != ''
+        run: ruff check ${{ needs.perimetre.outputs.zones_py }}
