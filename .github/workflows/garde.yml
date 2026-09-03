@@ -40,6 +40,26 @@
 # constats. Ne JAMAIS redescendre une version pour reduire les
 # trouvailles : ce serait desarmer le controle en le deguisant en
 # maintenance.
+#
+# CE QUE LE DEPOT PEUT DECLARER, ET C'EST TOUT.
+# ---------------------------------------------
+# Ce fichier est identique a l'OCTET dans tous les depots. Deux crochets
+# lui permettent quand meme de coller a un depot particulier, et les
+# deux sont des CONVENTIONS CALCULEES, pas des valeurs a tenir a jour :
+#
+#   .github/zones-tierces        un pathspec git par ligne. Ce qui vient
+#                                d'un tiers ne s'analyse pas, il se
+#                                DECLARE. Mesure du 03/09 sur
+#                                StS2-Modding-Full : 10 066 fichiers
+#                                analysables, dont 10 010 de decompile
+#                                MegaCrit. Trois lignes ramenent le
+#                                perimetre a 56 - le code de CCO.
+#   .github/ci/controles_locaux.sh   execute par `cco custom controls`
+#                                s'il existe. C'est la que le depot
+#                                branche SES gardes.
+#
+# Absents, les deux ne font rien et le disent. Presents, ils ne peuvent
+# qu'etre lus par ce fichier-ci, qui ne change pas.
 name: garde
 
 on:
@@ -62,6 +82,8 @@ jobs:
     outputs:
       code: ${{ steps.detect.outputs.code }}
       zones_py: ${{ steps.detect.outputs.zones_py }}
+      zones_cs: ${{ steps.detect.outputs.zones_cs }}
+      non_couverts: ${{ steps.detect.outputs.non_couverts }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
       - id: detect
@@ -70,7 +92,17 @@ jobs:
           # `git ls-files` et non `find` : on juge le DEPOT, pas l'espace
           # de travail. Un artefact de construction ne doit pas armer un
           # controle, et un fichier suivi mais absent du disque compte.
-          motifs="*.py *.js *.ts *.jsx *.tsx"
+          # LES MOTIFS SONT UN TABLEAU, ET C'EST UNE CORRECTION PAYEE.
+          #
+          # Ils etaient une chaine non quotee : le SHELL les developpait
+          # avant git, donc un fichier a la RACINE du depot mangeait le
+          # motif. Mesure du 03/09 : `disshect` votait sur 1 fichier au
+          # lieu de 6 - `disshect.py` est a la racine, `*.py` devenait
+          # `disshect.py`, et les cinq de `lib/` et `checks/` sortaient
+          # du compte. `DisplayTheSpire` comptait 2 fichiers C# sur 20
+          # pour la meme raison. Un tableau quote passe les motifs a git
+          # tels quels.
+          motifs=('*.py' '*.js' '*.ts' '*.jsx' '*.tsx' '*.cs')
           # `.github/` est EXCLU de la detection, et c'est la garde qui
           # empeche la porte de se mentir a elle-meme. L'outillage de
           # cette chaine est un fichier Python, identique dans tous les
@@ -90,11 +122,44 @@ jobs:
           # DisplayTheSpire, les trois seuls a devoir rendre `false`.
           # `:(exclude)` fait le tri DANS git, sans tuyau et sans code de
           # retour a rattraper.
-          n=$(git ls-files $motifs ':(exclude).github/*' | wc -l)
-          echo "fichiers python/js/ts suivis : $n"
+          # LA MATIERE PREMIERE TIERCE SE DECLARE, elle ne se devine
+          # pas. Un depot qui porte du decompile ou un greffon recopie
+          # pose `.github/zones-tierces` ; sans ce fichier, rien n'est
+          # exclu, ce qui est le bon defaut.
+          exclus=()
+          if [ -f .github/zones-tierces ]; then
+            while IFS= read -r ligne || [ -n "$ligne" ]; do
+              case "$ligne" in ''|'#'*) continue ;; esac
+              exclus+=(":(exclude)$ligne")
+            done < .github/zones-tierces
+            echo "zones tierces declarees : ${#exclus[@]}"
+          fi
+
+          n=$(git ls-files "${motifs[@]}" ':(exclude).github/*' \
+                ${exclus[@]+"${exclus[@]}"} | wc -l)
+          echo "fichiers analysables suivis : $n"
+
+          # CE QUE CETTE CHAINE NE SAIT PAS LIRE, ELLE LE DIT.
+          #
+          # Une porte qui rend `false` ne prouve pas qu'un depot est
+          # sans code : elle prouve qu'il ne porte rien que CES outils
+          # lisent. Mesure du 03/09 : `LeekwarsAI` porte 60 fichiers
+          # `.leek` et n'a aucune analyse statique ; `DisplayTheSpire`
+          # en avait 20 en C# dans le meme cas avant ce commit. Le
+          # silence sur ce point se lit comme une couverture, et c'est
+          # le pire etat d'un controle.
+          nc=""
+          for ext in leek c h go java rb php sh sql rs kt swift lua; do
+            c=$(git ls-files "*.$ext" ${exclus[@]+"${exclus[@]}"} | wc -l)
+            [ "$c" -gt 0 ] && nc="$nc $ext=$c"
+          done
+          echo "NON COUVERTS par cette chaine :${nc:- (aucun)}"
+          echo "non_couverts=${nc# }" >> "$GITHUB_OUTPUT"
+
           if [ "$n" -eq 0 ]; then
             echo "code=false" >> "$GITHUB_OUTPUT"
             echo "zones_py=" >> "$GITHUB_OUTPUT"
+            echo "zones_cs=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           # LES ZONES SE CALCULENT AUSSI. Coder `tools/` en dur ferait du
@@ -111,10 +176,15 @@ jobs:
           # d'etre lu, et c'est pire que pas de controle.
           # Le JS et le TS sont couverts par semgrep, qui balaye `.` avec
           # ses propres configurations.
-          zones_py=$(git ls-files '*.py' | sed 's|/.*||' | sort -u | tr '\n' ' ')
+          zones_py=$(git ls-files '*.py' ${exclus[@]+"${exclus[@]}"} \
+                     | sed 's|/.*||' | sort -u | tr '\n' ' ')
+          zones_cs=$(git ls-files '*.cs' ${exclus[@]+"${exclus[@]}"} \
+                     | sed 's|/.*||' | sort -u | tr '\n' ' ')
           echo "code=true" >> "$GITHUB_OUTPUT"
           echo "zones_py=$zones_py" >> "$GITHUB_OUTPUT"
+          echo "zones_cs=$zones_cs" >> "$GITHUB_OUTPUT"
           echo "zones python pour ruff et bandit : ${zones_py:-(aucune)}"
+          echo "zones C# pour semgrep : ${zones_cs:-(aucune)}"
 
   # ------------------------------------------------------------------
   # ACTIF PAR DEFAUT, sur tout depot.
@@ -150,7 +220,16 @@ jobs:
       # familles differentes - motif et entropie - doivent etre trouves.
       # Elargir une exclusion pour verdir le job aveugle un des deux et
       # l'outil s'arrete au lieu de rendre un zero rassurant.
+      # `if: always()` : LE MEME DEFAUT QUE DANS `qualite`, ET IL A
+      # COUTE PLUS CHER ICI. Sans lui, un echec de `gitleaks` marque
+      # cette etape `skipped` et le KPI ne tourne pas. Mesure du 03/09
+      # sur `cyrihack-infra` : `gitleaks` echouait depuis l'arrivee de
+      # la chaine, donc le KPI n'avait JAMAIS tourne - et des qu'il a
+      # tourne il a trouve un residuel. Le premier echec ne masquait pas
+      # seulement le second : il masquait qu'on ne savait rien du
+      # second.
       - name: trufflehog, triage et KPI
+        if: always()
         run: |
           set -euo pipefail
           pip install --quiet trufflehog3==3.0.10
@@ -173,6 +252,23 @@ jobs:
         # ce controle ne peut pas les voir. Il est declare pour memoire et
         # deviendra bloquant quand les deux depots seront reunis.
         run: echo "a activer quand le depot des Skills sera joint"
+      # LES GARDES PROPRES AU DEPOT, S'IL EN A.
+      #
+      # Un chemin FIXE, pas une liste de noms a deviner : le depot pose
+      # `.github/ci/controles_locaux.sh` et y appelle ce qu'il veut.
+      # Absent, l'etape le dit et rend zero - une garde qui n'existe pas
+      # n'est pas une garde qui echoue. Presente, elle est BLOQUANTE :
+      # un controle qu'on branche pour ne pas le lire ne sert a rien.
+      - name: controles locaux du depot
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -f .github/ci/controles_locaux.sh ]; then
+            echo "controles locaux : .github/ci/controles_locaux.sh"
+            bash .github/ci/controles_locaux.sh
+          else
+            echo "aucun controle local declare (.github/ci/controles_locaux.sh absent)"
+          fi
 
   # ------------------------------------------------------------------
   # ARME SEULEMENT SI LE DEPOT PORTE DU CODE que ces outils lisent.
@@ -201,6 +297,29 @@ jobs:
       # et `bandit -r` sans argument analysent le repertoire COURANT,
       # donc tout le depot. Un depot sans Python passerait de "rien a
       # analyser" a "tout analyser", en silence.
+      # LE C# EST DANS UNE ETAPE A PART, ET C'EST DELIBERE.
+      #
+      # `p/csharp` n'a pas pu etre verifie depuis le conteneur ou ce
+      # commit est ecrit - le mandataire refuse semgrep.dev, y compris
+      # sur `p/python` dont on sait qu'il marche en CI. La sonde ne
+      # distingue donc rien, et le nom du jeu de regles reste une
+      # HYPOTHESE jusqu'a la premiere execution. Isole ici, et garde par
+      # `zones_cs`, un nom faux ne peut rougir que les depots qui
+      # portent du C# - pas les onze.
+      - name: semgrep - C#
+        if: always() && needs.perimetre.outputs.zones_cs != ''
+        run: semgrep scan --config p/csharp --error --quiet
+                          ${{ needs.perimetre.outputs.zones_cs }}
+      - name: ce que la chaine ne lit pas
+        if: always()
+        run: |
+          nc='${{ needs.perimetre.outputs.non_couverts }}'
+          if [ -n "$nc" ]; then
+            echo "AUCUNE analyse statique sur : $nc"
+            echo "Un vert de ce job ne dit rien de ces fichiers."
+          else
+            echo "tout le code suivi est couvert par au moins un outil"
+          fi
       - name: bandit
         if: always() && needs.perimetre.outputs.zones_py != ''
         run: bandit -r ${{ needs.perimetre.outputs.zones_py }} -ll -q
