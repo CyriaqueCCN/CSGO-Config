@@ -165,6 +165,26 @@ jobs:
           for e in ${exclus[@]+"${exclus[@]}"}; do
             chemin="${e#:(exclude)}"
             chemin="${chemin%/\*}"
+            # ET LA BARRE FINALE SE RETIRE AUSSI. Trois depots
+            # declarent leur zone avec : `obj/`, `sts2/`,
+            # `cyriaque_site/static/highlight-js/`.
+            #
+            # HONNETEMENT : ce n'est PAS un correctif de defaut. Les
+            # trois outils ont ete mesures le 03/09, avec et sans la
+            # barre, et les trois excluent pareil. C'est une
+            # normalisation : elle retire une difference que rien ne
+            # garantit, dans un endroit ou une exclusion muette a
+            # deja coute deux fois.
+            #
+            # Ce qui EST fragile et a ete trouve en le mesurant :
+            # `bandit -x` compare au chemin TEL QU'IL LE CONSTRUIT.
+            # Racine `.` -> chemins `./zone/...`, et `-x zone` ne
+            # correspond plus ; `-x ./zone` oui. La chaine ne passe
+            # jamais `.` comme zone (elles viennent d'un
+            # `sed 's|/.*||'` sur `git ls-files`, donc des noms de
+            # premier niveau), mais le jour ou ca changerait,
+            # l'exclusion s'eteindrait sans un mot.
+            chemin="${chemin%/}"
             case "$chemin" in
               *[[:space:]]*)
                 echo "ARRET: chemin declare avec un espace : $chemin"
@@ -326,10 +346,37 @@ jobs:
         with:
           python-version: '3.13'
       - run: pip install --quiet semgrep==1.176.0 bandit==1.9.4 ruff==0.16.5
+      # ET SEMGREP RECOIT LES EXCLUSIONS, LUI AUSSI. C'est le
+      # meme defaut que `zones-tierces` portait ce matin, dans son
+      # dernier recoin : `ruff` et `bandit` recevaient `tierces`,
+      # l'etape C# aussi, et CETTE etape-ci balayait `.` sans rien
+      # exclure. La declaration etait donc honoree par deux outils
+      # sur trois - une garde qui garde a moitie se relit comme une
+      # garde.
+      #
+      # Mesure du 03/09 sur `rainfall`, reproduite hors ligne avec
+      # semgrep 1.176.0 (la version epinglee) et une regle locale
+      # equivalente, faute d'atteindre semgrep.dev depuis ce
+      # conteneur :
+      #
+      #     sans exclusion  ->  2 constats, rc=1
+      #     avec            ->  0 constats, rc=0
+      #
+      # Les deux constats etaient `os.chmod(outfile, 0o755)` a la
+      # ligne 5678 des DEUX copies du greffon GDB PEDA, du code que
+      # personne ici n'a ecrit et que le depot declare comme tiers.
+      #
+      # Controle actif passe : avec les memes exclusions, un temoin
+      # fabrique HORS de la zone exclue est toujours attrape, rc=1.
+      # L'exclusion retrecit le perimetre, elle n'aveugle pas
+      # l'outil.
       - name: semgrep - python et js/ts
-        run: semgrep scan --config p/python --config p/javascript
-                          --config p/typescript --config p/secrets
-                          --error --quiet .
+        run: |
+          set -euo pipefail
+          ex=""; for t in ${{ needs.perimetre.outputs.tierces }}; do ex="$ex --exclude $t"; done
+          semgrep scan --config p/python --config p/javascript \
+                       --config p/typescript --config p/secrets \
+                       --error --quiet $ex .
       # `if: always()` : sans lui, l'echec de semgrep SAUTE les deux
       # etapes suivantes et le job ne rapporte qu'un tiers de ce qu'il
       # reproche. Mesure du 03/09 : semgrep echouait, bandit et ruff
