@@ -1,0 +1,429 @@
+# Chaine de garde. TOUT RESTE PRIVE : aucun rapport n'est publie, aucun
+# artefact ne sort du depot, aucune action tierce non epinglee.
+#
+# POURQUOI LES ACTIONS SONT EPINGLEES PAR EMPREINTE ET NON PAR ETIQUETTE.
+# Une etiquette `@v3` est mutable : le proprietaire de l'action peut la
+# repointer sur n'importe quel commit, et ce commit s'executerait avec nos
+# secrets. L'empreinte est la seule reference qui ne bouge pas.
+#
+# CE QUE CETTE CHAINE N'EST PAS. CCO a demande un IAST. Un IAST vrai
+# instrumente le programme A L'EXECUTION ; ce qui suit est du SAST et du
+# balayage de secrets, qui lisent le code au repos. La difference compte :
+# un SAST ne voit pas un defaut qui n'existe qu'avec des donnees reelles.
+# Nommer la chose correctement vaut mieux que promettre ce qu'on ne fait
+# pas ; l'IAST reste un chantier ouvert.
+#
+# LA POLITIQUE, posee par CCO le 03/09/2026.
+# ------------------------------------------
+# Deux jobs sont ACTIFS PAR DEFAUT sur tout depot : `cco custom controls`
+# et `secrets`. Le troisieme, `qualite`, ne s'arme que sur un depot qui
+# PORTE DU CODE que ses outils savent lire.
+#
+# La porte se CALCULE, elle ne se maintient pas. Une liste de depots
+# " portant du code " serait fausse au premier depot cree, et sa
+# peremption serait silencieuse : le job ne tournerait pas et personne ne
+# le verrait. Le job `perimetre` compte donc les fichiers SUIVIS PAR GIT
+# et rend une sortie que `qualite` consulte. Meme fichier partout, aucune
+# valeur a tenir a jour.
+# LES OUTILS SONT EPINGLES, COMME LES ACTIONS ET POUR LA MEME RAISON.
+# Ce fichier epingle ses actions par empreinte parce qu'une etiquette
+# mutable laisse un tiers changer ce qui s'execute chez nous. Les outils
+# Python etaient installes SANS version : le sens du job changeait donc
+# sous nous, sans commit et sans que personne le voie.
+#
+# Paye le 03/09 : `ruff check` rendait 113 erreurs avec 0.15.8 et 2497
+# avec 0.16.5, la version que `pip install ruff` allait chercher. Un
+# facteur vingt-deux, pour zero ligne de code modifiee. Un verdict qui
+# bouge sans commit n'est pas un verdict.
+#
+# Monter une version est desormais un COMMIT, relu, avec son delta de
+# constats. Ne JAMAIS redescendre une version pour reduire les
+# trouvailles : ce serait desarmer le controle en le deguisant en
+# maintenance.
+#
+# CE QUE LE DEPOT PEUT DECLARER, ET C'EST TOUT.
+# ---------------------------------------------
+# Ce fichier est identique a l'OCTET dans tous les depots. Deux crochets
+# lui permettent quand meme de coller a un depot particulier, et les
+# deux sont des CONVENTIONS CALCULEES, pas des valeurs a tenir a jour :
+#
+#   .github/zones-tierces        un pathspec git par ligne. Ce qui vient
+#                                d'un tiers ne s'analyse pas, il se
+#                                DECLARE. Mesure du 03/09 sur
+#                                StS2-Modding-Full : 10 066 fichiers
+#                                analysables, dont 10 010 de decompile
+#                                MegaCrit. Trois lignes ramenent le
+#                                perimetre a 56 - le code de CCO.
+#   .github/ci/controles_locaux.sh   execute par `cco custom controls`
+#                                s'il existe. C'est la que le depot
+#                                branche SES gardes.
+#
+# Absents, les deux ne font rien et le disent. Presents, ils ne peuvent
+# qu'etre lus par ce fichier-ci, qui ne change pas.
+name: garde
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+
+  # ------------------------------------------------------------------
+  # La porte de `qualite`. Elle ne decide rien d'autre.
+  # ------------------------------------------------------------------
+  perimetre:
+    name: perimetre - ce depot porte-t-il du code
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.detect.outputs.code }}
+      zones_py: ${{ steps.detect.outputs.zones_py }}
+      zones_cs: ${{ steps.detect.outputs.zones_cs }}
+      tierces: ${{ steps.detect.outputs.tierces }}
+      non_couverts: ${{ steps.detect.outputs.non_couverts }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - id: detect
+        run: |
+          set -euo pipefail
+          # `git ls-files` et non `find` : on juge le DEPOT, pas l'espace
+          # de travail. Un artefact de construction ne doit pas armer un
+          # controle, et un fichier suivi mais absent du disque compte.
+          # LES MOTIFS SONT UN TABLEAU, ET C'EST UNE CORRECTION PAYEE.
+          #
+          # Ils etaient une chaine non quotee : le SHELL les developpait
+          # avant git, donc un fichier a la RACINE du depot mangeait le
+          # motif. Mesure du 03/09 : `disshect` votait sur 1 fichier au
+          # lieu de 6 - `disshect.py` est a la racine, `*.py` devenait
+          # `disshect.py`, et les cinq de `lib/` et `checks/` sortaient
+          # du compte. `DisplayTheSpire` comptait 2 fichiers C# sur 20
+          # pour la meme raison. Un tableau quote passe les motifs a git
+          # tels quels.
+          motifs=('*.py' '*.js' '*.ts' '*.jsx' '*.tsx' '*.cs')
+          # `.github/` est EXCLU de la detection, et c'est la garde qui
+          # empeche la porte de se mentir a elle-meme. L'outillage de
+          # cette chaine est un fichier Python, identique dans tous les
+          # depots : l'y compter rendrait `code=true` PARTOUT, y compris
+          # sur un depot qui ne porte aucune ligne de code a lui. La
+          # porte deviendrait toujours vraie, donc inutile.
+          #
+          # Il reste dans les ZONES analysees quand le depot porte du
+          # code par ailleurs : on ne l'exclut pas de l'analyse, on
+          # l'exclut du VOTE.
+          # L'EXCLUSION EST UN PATHSPEC GIT, PAS UN `grep`, ET C'EST UNE
+          # CORRECTION PAYEE. `grep -v` rend 1 quand il ne laisse RIEN
+          # passer : sous `set -euo pipefail`, ce 1 tue le pipeline puis
+          # l'etape. La porte mourait donc exactement sur le cas qu'elle
+          # existe pour detecter - un depot SANS code. Mesure du 03/09 :
+          # `perimetre` en echec sur 42utils, CSGO-Config et
+          # DisplayTheSpire, les trois seuls a devoir rendre `false`.
+          # `:(exclude)` fait le tri DANS git, sans tuyau et sans code de
+          # retour a rattraper.
+          # LA MATIERE PREMIERE TIERCE SE DECLARE, elle ne se devine
+          # pas. Un depot qui porte du decompile ou un greffon recopie
+          # pose `.github/zones-tierces` ; sans ce fichier, rien n'est
+          # exclu, ce qui est le bon defaut.
+          exclus=()
+          if [ -f .github/zones-tierces ]; then
+            while IFS= read -r ligne || [ -n "$ligne" ]; do
+              case "$ligne" in ''|'#'*) continue ;; esac
+              exclus+=(":(exclude)$ligne")
+            done < .github/zones-tierces
+            echo "zones tierces declarees : ${#exclus[@]}"
+          fi
+
+          # UNE DECLARATION QUI NE FAIT RIEN EST PIRE QU'AUCUNE, ET
+          # C'EST CE QUE CE FICHIER FAISAIT JUSQU'ICI.
+          #
+          # `zones-tierces` retirait bien un chemin de la LISTE DE
+          # FICHIERS, mais les zones ci-dessous se reduisent aux entrees
+          # de PREMIER NIVEAU : un chemin declare SOUS ce niveau sortait
+          # de la liste et son repertoire parent restait une zone. ruff
+          # recevait le repertoire et rescannait tout dessous.
+          #
+          # Mesure du 03/09 sur `rainfall`, deux copies du greffon GDB
+          # PEDA sous `override/tools/peda/` et `rainfall/tools/peda/` :
+          #
+          #     sans exclusion outil   ->  ruff 1464   bandit 22
+          #     avec                   ->  ruff   14   bandit  0
+          #
+          # 1450 constats sur du code que personne ici n'a ecrit. Meme
+          # defaut sur `42projects` (330 sur 345) et sur `cyriaque-site`
+          # (declarer `*/migrations/*` ne retirait aucun des 14).
+          #
+          # POURQUOI PAS UNE LISTE DE FICHIERS. Essayee et REJETEE par la
+          # simulation : `web-challenges` porte
+          # `Codingame/Codingame Challenge 2022/IA.py`, et une liste
+          # jointe par des espaces se fait redecouper par le shell. Les
+          # outils, eux, savent exclure un chemin imbrique : on leur
+          # passe donc l'exclusion, on ne bricole pas la liste.
+          tierces=""
+          for e in ${exclus[@]+"${exclus[@]}"}; do
+            chemin="${e#:(exclude)}"
+            chemin="${chemin%/\*}"
+            # ET LA BARRE FINALE SE RETIRE AUSSI. Trois depots
+            # declarent leur zone avec : `obj/`, `sts2/`,
+            # `cyriaque_site/static/highlight-js/`.
+            #
+            # HONNETEMENT : ce n'est PAS un correctif de defaut. Les
+            # trois outils ont ete mesures le 03/09, avec et sans la
+            # barre, et les trois excluent pareil. C'est une
+            # normalisation : elle retire une difference que rien ne
+            # garantit, dans un endroit ou une exclusion muette a
+            # deja coute deux fois.
+            #
+            # Ce qui EST fragile et a ete trouve en le mesurant :
+            # `bandit -x` compare au chemin TEL QU'IL LE CONSTRUIT.
+            # Racine `.` -> chemins `./zone/...`, et `-x zone` ne
+            # correspond plus ; `-x ./zone` oui. La chaine ne passe
+            # jamais `.` comme zone (elles viennent d'un
+            # `sed 's|/.*||'` sur `git ls-files`, donc des noms de
+            # premier niveau), mais le jour ou ca changerait,
+            # l'exclusion s'eteindrait sans un mot.
+            chemin="${chemin%/}"
+            case "$chemin" in
+              *[[:space:]]*)
+                echo "ARRET: chemin declare avec un espace : $chemin"
+                echo "  Les exclusions sont passees en arguments aux"
+                echo "  outils ; un espace y serait redecoupe par le"
+                echo "  shell et l'exclusion porterait ailleurs."
+                exit 1 ;;
+            esac
+            tierces="$tierces $chemin"
+          done
+          echo "tierces=${tierces# }" >> "$GITHUB_OUTPUT"
+
+          n=$(git ls-files "${motifs[@]}" ':(exclude).github/*' \
+                ${exclus[@]+"${exclus[@]}"} | wc -l)
+          echo "fichiers analysables suivis : $n"
+
+          # CE QUE CETTE CHAINE NE SAIT PAS LIRE, ELLE LE DIT.
+          #
+          # Une porte qui rend `false` ne prouve pas qu'un depot est
+          # sans code : elle prouve qu'il ne porte rien que CES outils
+          # lisent. Mesure du 03/09 : `LeekwarsAI` porte 60 fichiers
+          # `.leek` et n'a aucune analyse statique ; `DisplayTheSpire`
+          # en avait 20 en C# dans le meme cas avant ce commit. Le
+          # silence sur ce point se lit comme une couverture, et c'est
+          # le pire etat d'un controle.
+          nc=""
+          for ext in leek c h go java rb php sh sql rs kt swift lua; do
+            c=$(git ls-files "*.$ext" ${exclus[@]+"${exclus[@]}"} | wc -l)
+            [ "$c" -gt 0 ] && nc="$nc $ext=$c"
+          done
+          echo "NON COUVERTS par cette chaine :${nc:- (aucun)}"
+          echo "non_couverts=${nc# }" >> "$GITHUB_OUTPUT"
+
+          if [ "$n" -eq 0 ]; then
+            echo "code=false" >> "$GITHUB_OUTPUT"
+            echo "zones_py=" >> "$GITHUB_OUTPUT"
+            echo "zones_cs=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # LES ZONES SE CALCULENT AUSSI. Coder `tools/` en dur ferait du
+          # fichier une valeur par depot, donc une divergence qui attend.
+          # On prend les entrees de PREMIER NIVEAU qui portent du code :
+          # un repertoire, ou un fichier pose a la racine.
+          #
+          # ET ELLES NE PORTENT QUE DU PYTHON. `ruff` et `bandit` sont des
+          # outils PYTHON : leur passer un chemin JavaScript ne les fait
+          # pas refuser, ca leur fait analyser le fichier COMME du Python.
+          # Mesure du 03/09 sur Leekwars-Userscript : `ruff check` rend
+          # 2615 `invalid-syntax` sur un userscript de 2615 lignes, une
+          # par ligne. Un controle qui rend 2615 lignes de bruit cesse
+          # d'etre lu, et c'est pire que pas de controle.
+          # Le JS et le TS sont couverts par semgrep, qui balaye `.` avec
+          # ses propres configurations.
+          zones_py=$(git ls-files '*.py' ${exclus[@]+"${exclus[@]}"} \
+                     | sed 's|/.*||' | sort -u | tr '\n' ' ')
+          zones_cs=$(git ls-files '*.cs' ${exclus[@]+"${exclus[@]}"} \
+                     | sed 's|/.*||' | sort -u | tr '\n' ' ')
+          echo "code=true" >> "$GITHUB_OUTPUT"
+          echo "zones_py=$zones_py" >> "$GITHUB_OUTPUT"
+          echo "zones_cs=$zones_cs" >> "$GITHUB_OUTPUT"
+          echo "zones python pour ruff et bandit : ${zones_py:-(aucune)}"
+          echo "zones C# pour semgrep : ${zones_cs:-(aucune)}"
+
+  # ------------------------------------------------------------------
+  # ACTIF PAR DEFAUT, sur tout depot.
+  # ------------------------------------------------------------------
+  secrets:
+    name: secrets - gitleaks, trufflehog, KPI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          fetch-depth: 0   # l'historique ENTIER : un secret retire au
+                           # commit suivant reste dans l'historique.
+      - name: gitleaks
+        run: |
+          set -euo pipefail
+          V=8.18.4
+          curl -sSfL -o /tmp/gl.tgz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${V}/gitleaks_${V}_linux_x64.tar.gz"
+          tar -xzf /tmp/gl.tgz -C /tmp gitleaks
+          /tmp/gitleaks detect --source . --redact --no-banner --exit-code 1
+
+      # LA REPASSE ET LES KPI, demandes par CCO le 03/09.
+      # Un compte de trouvailles ne dit ni si le balayeur a regarde, ni si
+      # ce qu'il trouve sont des secrets. Cet outil mesure le BRUT (sans
+      # exclusions), le RESIDUEL (avec), en deduit les faux positifs et
+      # leur taux, et COMPARE le tout a une reference versionnee.
+      #
+      # Il ne l'ECRIT pas : `permissions: contents: read` est delibere, et
+      # un job qui ecrit dans le depot demanderait le droit inverse. Un
+      # ecart fait echouer, et le corriger est un commit humain, relu.
+      #
+      # Son controle actif passe AVANT la mesure : deux temoins de
+      # familles differentes - motif et entropie - doivent etre trouves.
+      # Elargir une exclusion pour verdir le job aveugle un des deux et
+      # l'outil s'arrete au lieu de rendre un zero rassurant.
+      # `if: always()` : LE MEME DEFAUT QUE DANS `qualite`, ET IL A
+      # COUTE PLUS CHER ICI. Sans lui, un echec de `gitleaks` marque
+      # cette etape `skipped` et le KPI ne tourne pas. Mesure du 03/09
+      # sur `cyrihack-infra` : `gitleaks` echouait depuis l'arrivee de
+      # la chaine, donc le KPI n'avait JAMAIS tourne - et des qu'il a
+      # tourne il a trouve un residuel. Le premier echec ne masquait pas
+      # seulement le second : il masquait qu'on ne savait rien du
+      # second.
+      - name: trufflehog, triage et KPI
+        if: always()
+        run: |
+          set -euo pipefail
+          pip install --quiet trufflehog3==3.0.10
+          python3 .github/ci/kpi_secrets.py
+
+  # ------------------------------------------------------------------
+  # ACTIF PAR DEFAUT, sur tout depot. Renomme le 03/09 a la demande de
+  # CCO : ce sont SES controles, le nom le dit.
+  # ------------------------------------------------------------------
+  cco_custom_controls:
+    name: cco custom controls
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38  # v5.4.0
+        with:
+          python-version: '3.13'
+      - name: index des Skills a jour
+        # Non bloquant ici : les Skills vivent dans un AUTRE depot, donc
+        # ce controle ne peut pas les voir. Il est declare pour memoire et
+        # deviendra bloquant quand les deux depots seront reunis.
+        run: echo "a activer quand le depot des Skills sera joint"
+      # LES GARDES PROPRES AU DEPOT, S'IL EN A.
+      #
+      # Un chemin FIXE, pas une liste de noms a deviner : le depot pose
+      # `.github/ci/controles_locaux.sh` et y appelle ce qu'il veut.
+      # Absent, l'etape le dit et rend zero - une garde qui n'existe pas
+      # n'est pas une garde qui echoue. Presente, elle est BLOQUANTE :
+      # un controle qu'on branche pour ne pas le lire ne sert a rien.
+      - name: controles locaux du depot
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -f .github/ci/controles_locaux.sh ]; then
+            echo "controles locaux : .github/ci/controles_locaux.sh"
+            bash .github/ci/controles_locaux.sh
+          else
+            echo "aucun controle local declare (.github/ci/controles_locaux.sh absent)"
+          fi
+
+  # ------------------------------------------------------------------
+  # ARME SEULEMENT SI LE DEPOT PORTE DU CODE que ces outils lisent.
+  # ------------------------------------------------------------------
+  qualite:
+    name: qualite - semgrep, bandit, ruff
+    needs: perimetre
+    if: needs.perimetre.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38  # v5.4.0
+        with:
+          python-version: '3.13'
+      - run: pip install --quiet semgrep==1.176.0 bandit==1.9.4 ruff==0.16.5
+      # ET SEMGREP RECOIT LES EXCLUSIONS, LUI AUSSI. C'est le
+      # meme defaut que `zones-tierces` portait ce matin, dans son
+      # dernier recoin : `ruff` et `bandit` recevaient `tierces`,
+      # l'etape C# aussi, et CETTE etape-ci balayait `.` sans rien
+      # exclure. La declaration etait donc honoree par deux outils
+      # sur trois - une garde qui garde a moitie se relit comme une
+      # garde.
+      #
+      # Mesure du 03/09 sur `rainfall`, reproduite hors ligne avec
+      # semgrep 1.176.0 (la version epinglee) et une regle locale
+      # equivalente, faute d'atteindre semgrep.dev depuis ce
+      # conteneur :
+      #
+      #     sans exclusion  ->  2 constats, rc=1
+      #     avec            ->  0 constats, rc=0
+      #
+      # Les deux constats etaient `os.chmod(outfile, 0o755)` a la
+      # ligne 5678 des DEUX copies du greffon GDB PEDA, du code que
+      # personne ici n'a ecrit et que le depot declare comme tiers.
+      #
+      # Controle actif passe : avec les memes exclusions, un temoin
+      # fabrique HORS de la zone exclue est toujours attrape, rc=1.
+      # L'exclusion retrecit le perimetre, elle n'aveugle pas
+      # l'outil.
+      - name: semgrep - python et js/ts
+        run: |
+          set -euo pipefail
+          ex=""; for t in ${{ needs.perimetre.outputs.tierces }}; do ex="$ex --exclude $t"; done
+          semgrep scan --config p/python --config p/javascript \
+                       --config p/typescript --config p/secrets \
+                       --error --quiet $ex .
+      # `if: always()` : sans lui, l'echec de semgrep SAUTE les deux
+      # etapes suivantes et le job ne rapporte qu'un tiers de ce qu'il
+      # reproche. Mesure du 03/09 : semgrep echouait, bandit et ruff
+      # etaient marques `skipped`, et 27 puis 113 constats n'avaient
+      # jamais ete vus. Le premier echec masquait, il ne resumait pas.
+      # La garde sur la chaine vide n'est pas cosmetique : `ruff check`
+      # et `bandit -r` sans argument analysent le repertoire COURANT,
+      # donc tout le depot. Un depot sans Python passerait de "rien a
+      # analyser" a "tout analyser", en silence.
+      # LE C# EST DANS UNE ETAPE A PART, ET C'EST DELIBERE.
+      #
+      # `p/csharp` n'a pas pu etre verifie depuis le conteneur ou ce
+      # commit est ecrit - le mandataire refuse semgrep.dev, y compris
+      # sur `p/python` dont on sait qu'il marche en CI. La sonde ne
+      # distingue donc rien, et le nom du jeu de regles reste une
+      # HYPOTHESE jusqu'a la premiere execution. Isole ici, et garde par
+      # `zones_cs`, un nom faux ne peut rougir que les depots qui
+      # portent du C# - pas les onze.
+      - name: semgrep - C#
+        if: always() && needs.perimetre.outputs.zones_cs != ''
+        run: |
+          set -euo pipefail
+          ex=""; for t in ${{ needs.perimetre.outputs.tierces }}; do ex="$ex --exclude $t"; done
+          semgrep scan --config p/csharp --error --quiet $ex \
+                       ${{ needs.perimetre.outputs.zones_cs }}
+      - name: ce que la chaine ne lit pas
+        if: always()
+        run: |
+          nc='${{ needs.perimetre.outputs.non_couverts }}'
+          if [ -n "$nc" ]; then
+            echo "AUCUNE analyse statique sur : $nc"
+            echo "Un vert de ce job ne dit rien de ces fichiers."
+          else
+            echo "tout le code suivi est couvert par au moins un outil"
+          fi
+      - name: bandit
+        if: always() && needs.perimetre.outputs.zones_py != ''
+        run: |
+          set -euo pipefail
+          # `bandit` veut ses exclusions en UNE liste separee par des
+          # virgules, la ou `ruff` et `semgrep` veulent un drapeau par
+          # chemin. Trois outils, trois syntaxes.
+          ex=""; for t in ${{ needs.perimetre.outputs.tierces }}; do ex="${ex:+$ex,}$t"; done
+          bandit -r ${{ needs.perimetre.outputs.zones_py }} ${ex:+-x "$ex"} -ll -q
+      - name: ruff
+        if: always() && needs.perimetre.outputs.zones_py != ''
+        run: |
+          set -euo pipefail
+          ex=""; for t in ${{ needs.perimetre.outputs.tierces }}; do ex="$ex --exclude $t"; done
+          ruff check ${{ needs.perimetre.outputs.zones_py }} $ex
