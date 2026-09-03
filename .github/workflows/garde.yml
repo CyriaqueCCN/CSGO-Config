@@ -81,7 +81,16 @@ jobs:
           # Il reste dans les ZONES analysees quand le depot porte du
           # code par ailleurs : on ne l'exclut pas de l'analyse, on
           # l'exclut du VOTE.
-          n=$(git ls-files $motifs | grep -v '^\.github/' | wc -l)
+          # L'EXCLUSION EST UN PATHSPEC GIT, PAS UN `grep`, ET C'EST UNE
+          # CORRECTION PAYEE. `grep -v` rend 1 quand il ne laisse RIEN
+          # passer : sous `set -euo pipefail`, ce 1 tue le pipeline puis
+          # l'etape. La porte mourait donc exactement sur le cas qu'elle
+          # existe pour detecter - un depot SANS code. Mesure du 03/09 :
+          # `perimetre` en echec sur 42utils, CSGO-Config et
+          # DisplayTheSpire, les trois seuls a devoir rendre `false`.
+          # `:(exclude)` fait le tri DANS git, sans tuyau et sans code de
+          # retour a rattraper.
+          n=$(git ls-files $motifs ':(exclude).github/*' | wc -l)
           echo "fichiers python/js/ts suivis : $n"
           if [ "$n" -eq 0 ]; then
             echo "code=false" >> "$GITHUB_OUTPUT"
